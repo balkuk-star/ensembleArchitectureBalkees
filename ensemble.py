@@ -39,7 +39,7 @@ class WeightedEnsemble(nn.Module):
 def train_ensemble_head(model: WeightedEnsemble, train_loader, val_loader, device: torch.device, epochs: int = 10, lr: float = 1e-4):
     model.to(device)
     optimizer = torch.optim.Adam(model.weight_head.parameters(), lr=lr)
-    history = {"train_loss": [], "val_dice": []}
+    history = {"train_loss": [], "val_loss": [], "val_dice": []}
     best_dice = -1.0
     best_path = "best_ensemble.pth"
 
@@ -56,18 +56,23 @@ def train_ensemble_head(model: WeightedEnsemble, train_loader, val_loader, devic
             losses.append(loss.item())
 
         model.eval()
+        val_losses = []
         dices = []
         with torch.no_grad():
             for x, y in val_loader:
                 x, y = x.to(device), y.to(device)
-                m = compute_metrics_from_logits(model(x), y)
+                logits = model(x)
+                val_losses.append(dice_bce_loss(logits, y).item())
+                m = compute_metrics_from_logits(logits, y)
                 dices.append(m["Dice"])
 
         train_loss = float(np.mean(losses))
+        val_loss = float(np.mean(val_losses))
         val_dice = float(np.mean(dices))
         history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
         history["val_dice"].append(val_dice)
-        print(f"[Ensemble] Epoch {ep}/{epochs} | loss={train_loss:.4f} | val_dice={val_dice:.4f}")
+        print(f"[Ensemble] Epoch {ep}/{epochs} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_dice={val_dice:.4f}")
 
         if val_dice > best_dice:
             best_dice = val_dice

@@ -51,19 +51,42 @@ def evaluate_model(model, loader, device: torch.device) -> Dict[str, float]:
     return {k: float(np.mean(v)) for k, v in bag.items()}
 
 
+def _slugify_plot_name(value: str) -> str:
+    return value.lower().replace(" ", "_").replace("+", "plus")
+
+
+def _history_epochs(history: Dict[str, list]) -> np.ndarray:
+    if "epoch" in history and len(history["epoch"]) == len(history.get("train_loss", [])):
+        return np.asarray(history["epoch"])
+    return np.arange(1, len(history.get("train_loss", [])) + 1)
+
+
 def plot_training_curves(history: Dict[str, list], title: str, output_dir: str = DEFAULT_OUTPUT_DIR):
     force_colab_inline()
-    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-    ax[0].plot(history["train_loss"], label="train_loss")
-    if "val_loss" in history:
-        ax[0].plot(history["val_loss"], label="val_loss")
-    ax[0].set_title(f"{title} Loss")
+    epochs = _history_epochs(history)
+
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4), sharex=False)
+    ax[0].plot(epochs, history["train_loss"], marker="o", label="Train loss")
+    if "val_loss" in history and len(history["val_loss"]) == len(epochs):
+        ax[0].plot(epochs, history["val_loss"], marker="o", label="Validation loss")
+    ax[0].set_title(f"{title} Loss Curve")
+    ax[0].set_xlabel("Epoch")
+    ax[0].set_ylabel("Loss")
+    ax[0].grid(True, linestyle="--", alpha=0.35)
     ax[0].legend()
 
-    ax[1].plot(history["val_dice"], label="val_dice")
-    ax[1].set_title(f"{title} Dice")
+    ax[1].plot(epochs, history["val_dice"], marker="o", color="seagreen", label="Validation Dice")
+    ax[1].set_title(f"{title} Dice Curve")
+    ax[1].set_xlabel("Epoch")
+    ax[1].set_ylabel("Dice")
+    ax[1].set_ylim(0, 1)
+    ax[1].grid(True, linestyle="--", alpha=0.35)
     ax[1].legend()
-    save_plot(fig, f"loss_curve_{title.lower().replace(' ', '_').replace('+', 'plus')}.png", output_dir)
+
+    fig.tight_layout()
+    slug = _slugify_plot_name(title)
+    save_plot(fig, f"loss_dice_curves_{slug}.png", output_dir)
+    save_plot(fig, f"loss_curve_{slug}.png", output_dir)
     plt.show()
 
 
@@ -224,38 +247,67 @@ def print_comparison_table(df: pd.DataFrame) -> None:
     print(tabulate(df, headers="keys", tablefmt="github", showindex=False, floatfmt=".4f"))
 
 
+def _label_bars(ax: plt.Axes, values: pd.Series, y_offset: float = 0.01) -> None:
+    for patch, value in zip(ax.patches, values):
+        ax.text(
+            patch.get_x() + patch.get_width() / 2,
+            min(float(value) + y_offset, 1.0),
+            f"{float(value):.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+
 def plot_metrics(df: pd.DataFrame, output_dir: str = DEFAULT_OUTPUT_DIR):
     force_colab_inline()
 
-    # Dice bar chart
+    # Dice comparison across evaluated models.
     fig_dice, ax_dice = plt.subplots(figsize=(8, 4))
-    ax_dice.bar(df["Model"], df["Dice"])
+    ax_dice.bar(df["Model"], df["Dice"], color="seagreen")
     ax_dice.set_ylabel("Dice")
-    ax_dice.set_title("Dice Comparison")
+    ax_dice.set_title("Dice Comparison Across Evaluated Models")
     ax_dice.set_ylim(0, 1)
     ax_dice.tick_params(axis="x", rotation=20)
+    ax_dice.grid(axis="y", linestyle="--", alpha=0.35)
+    _label_bars(ax_dice, df["Dice"])
+    fig_dice.tight_layout()
+    save_plot(fig_dice, "dice_comparison.png", output_dir)
     save_plot(fig_dice, "dice_plot.png", output_dir)
     plt.show()
 
-    # IoU bar chart
+    # IoU comparison across evaluated models.
     fig_iou, ax_iou = plt.subplots(figsize=(8, 4))
     ax_iou.bar(df["Model"], df["IoU"], color="darkorange")
     ax_iou.set_ylabel("IoU")
-    ax_iou.set_title("IoU Comparison")
+    ax_iou.set_title("IoU Comparison Across Evaluated Models")
     ax_iou.set_ylim(0, 1)
     ax_iou.tick_params(axis="x", rotation=20)
+    ax_iou.grid(axis="y", linestyle="--", alpha=0.35)
+    _label_bars(ax_iou, df["IoU"])
+    fig_iou.tight_layout()
+    save_plot(fig_iou, "iou_comparison.png", output_dir)
     save_plot(fig_iou, "iou_plot.png", output_dir)
     plt.show()
 
-    # FPS vs Params (optional)
+    # FPS versus parameter count across evaluated models.
     if {"FPS", "Params"}.issubset(df.columns):
         fig_pp, ax_pp = plt.subplots(figsize=(7, 5))
-        ax_pp.scatter(df["Params"], df["FPS"], s=80)
+        params_millions = df["Params"] / 1_000_000
+        ax_pp.scatter(params_millions, df["FPS"], s=90, color="royalblue")
         for _, row in df.iterrows():
-            ax_pp.annotate(row["Model"], (row["Params"], row["FPS"]), textcoords="offset points", xytext=(5, 5))
-        ax_pp.set_xlabel("Parameters")
+            ax_pp.annotate(
+                row["Model"],
+                (row["Params"] / 1_000_000, row["FPS"]),
+                textcoords="offset points",
+                xytext=(5, 5),
+            )
+        ax_pp.set_xlabel("Parameter Count (Millions)")
         ax_pp.set_ylabel("FPS")
-        ax_pp.set_title("FPS vs Params")
+        ax_pp.set_title("FPS vs Parameter Count Across Evaluated Models")
+        ax_pp.grid(True, linestyle="--", alpha=0.35)
+        fig_pp.tight_layout()
+        save_plot(fig_pp, "fps_vs_parameter_count.png", output_dir)
         save_plot(fig_pp, "fps_vs_params.png", output_dir)
         plt.show()
 
