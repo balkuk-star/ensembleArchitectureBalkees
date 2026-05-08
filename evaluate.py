@@ -117,16 +117,28 @@ def visualize_predictions(
         label = model_name or model.__class__.__name__
         model_dict = {label: model}
 
+    for m in model_dict.values():
+        m.eval()
+
     with torch.no_grad():
-        preds = {name: torch.sigmoid(ensure_binary_output(m(x))).cpu() for name, m in model_dict.items()}
+        preds = {
+            name: torch.sigmoid(ensure_binary_output(m(x), size=y.shape[2:])).cpu()
+            for name, m in model_dict.items()
+        }
 
     saved_paths = []
     for name, pred in preds.items():
         fig = _build_pred_grid(x, y, pred, name, num_samples=num_samples)
         path = save_plot(fig, f"predictions_{name.lower().replace(' ', '_').replace('+', 'plus')}.png", output_dir)
         saved_paths.append(path)
+        print(f"[Saved] {path}")
         plt.show()
     return saved_paths
+
+
+def _prediction_mask(pred: torch.Tensor, sample_idx: int, threshold: float = 0.5) -> np.ndarray:
+    """Return one thresholded prediction mask as a NumPy array for plotting."""
+    return (pred[sample_idx, 0].numpy() > threshold).astype(np.float32)
 
 
 def visualize_model_comparison(
@@ -138,81 +150,52 @@ def visualize_model_comparison(
     filename: str = "predictions_all_models.png",
 ):
     """
-    Build a single comparison image with columns:
+    Build, save, and display a single comparison image with columns:
     Input | Ground Truth | <model1> | <model2> | ...
-    for 1-2 (or more) selected samples.
+    for the selected samples.
     """
     force_colab_inline()
     x, y = next(iter(loader))
     x, y = x.to(device), y.to(device)
 
+    for model in models.values():
+        model.eval()
+
     with torch.no_grad():
-        preds = {name: torch.sigmoid(ensure_binary_output(m(x))).cpu() for name, m in models.items()}
+        preds = {
+            name: torch.sigmoid(ensure_binary_output(model(x), size=y.shape[2:])).cpu()
+            for name, model in models.items()
+        }
 
     x_np = x.cpu().permute(0, 2, 3, 1).numpy()
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
     x_np = np.clip(x_np * std + mean, 0, 1)
-    pred_np = (preds[:, 0].numpy() > 0.5).astype(np.float32)
 
     rows = min(num_samples, x.shape[0])
-    fig, axes = plt.subplots(rows, 3, figsize=(12, 4 * rows))
-    if rows == 1:
-        axes = np.expand_dims(axes, axis=0)
-
-    for i in range(rows):
-        axes[i, 0].imshow(x_np[i])
-        axes[i, 0].set_title("Input")
-        axes[i, 1].imshow(y[i, 0].cpu().numpy(), cmap="gray")
-        axes[i, 1].set_title("Ground Truth")
-        axes[i, 2].imshow(pred_np[i], cmap="gray")
-        axes[i, 2].set_title(f"{model_name} Prediction")
-        for c in range(3):
-            axes[i, c].axis("off")
-    fig.tight_layout()
-    return fig
-
-
-def visualize_predictions(
-    model: Union[torch.nn.Module, Dict[str, torch.nn.Module]],
-    loader,
-    device: torch.device,
-    num_samples: int = 5,
-    model_name: Optional[str] = None,
-    output_dir: str = DEFAULT_OUTPUT_DIR,
-):
-    force_colab_inline()
-    x, y = next(iter(loader))
-    x, y = x.to(device), y.to(device)
-
-    model_dict: Dict[str, torch.nn.Module]
-    if isinstance(model, dict):
-        model_dict = model
-    else:
-        label = model_name or model.__class__.__name__
-        model_dict = {label: model}
-
-    rows = min(num_samples, x.shape[0])
-    cols = 2 + len(models)
-    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
-    if rows == 1:
-        axes = np.expand_dims(axes, axis=0)
-
     model_names = list(models.keys())
+    cols = 2 + len(model_names)
+    fig, axes = plt.subplots(rows, cols, figsize=(4 * cols, 4 * rows))
+    axes = np.asarray(axes)
+    if rows == 1:
+        axes = np.expand_dims(axes, axis=0)
+    if cols == 1:
+        axes = np.expand_dims(axes, axis=1)
+
     for i in range(rows):
         axes[i, 0].imshow(x_np[i])
         axes[i, 0].set_title("Input")
-        axes[i, 1].imshow(y[i, 0].cpu().numpy(), cmap="gray")
+        axes[i, 1].imshow(y[i, 0].detach().cpu().numpy(), cmap="gray")
         axes[i, 1].set_title("Ground Truth")
         for j, name in enumerate(model_names, start=2):
-            pred_mask = (preds[name][i, 0].numpy() > 0.5).astype(np.float32)
-            axes[i, j].imshow(pred_mask, cmap="gray")
+            axes[i, j].imshow(_prediction_mask(preds[name], i), cmap="gray")
             axes[i, j].set_title(name)
         for c in range(cols):
             axes[i, c].axis("off")
 
     fig.tight_layout()
     path = save_plot(fig, filename, output_dir=output_dir)
+    print(f"[Saved] {path}")
     plt.show()
     return path
 
